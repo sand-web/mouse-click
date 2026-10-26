@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="script-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <title>Mouse Click · 光圈大小</title>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">MOUSE CLICK</p>
+        <h1>光圈大小</h1>
+        <p class="description">数值越小，光圈越小。调整后立即生效。</p>
+      </header>
+
+      <section class="preview" aria-label="光圈比例预览">
+        <div id="previewRing"><span></span></div>
+        <p>比例预览 · 实际大小的 32%</p>
+      </section>
+
+      <section class="controls" aria-label="调节光圈半径">
+        <div class="value-row">
+          <label for="radius">半径 <span>屏幕逻辑像素</span></label>
+          <output id="radiusValue" for="radius radiusNumber">100</output>
+        </div>
+        <input id="radius" type="range" min="20" max="300" step="any" value="100" aria-label="光圈半径" />
+        <div class="scale"><span>20 · 更小</span><span>300 · 更大</span></div>
+        <div class="number-row">
+          <label for="radiusNumber">精确输入</label>
+          <input id="radiusNumber" type="number" min="20" max="300" step="any" value="100" />
+          <span>按回车确认</span>
+        </div>
+      </section>
+
+      <div class="save-row">
+        <p id="saveStatus" role="status" aria-live="polite">调整后自动保存</p>
+        <button id="retrySave" class="text-button" type="button" hidden>重试保存</button>
+      </div>
+      <footer>
+        <button id="showHighlight" class="primary" type="button">开启光圈</button>
+        <button id="hideHighlight" class="secondary" type="button">收起光圈</button>
+        <p>光圈开启时，也可滚动鼠标滚轮调节。</p>
+      </footer>
+    </main>
+    <script type="module" src="/src/settings.ts"></script>
+  </body>
+</html>

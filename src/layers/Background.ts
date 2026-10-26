@@ -4,7 +4,7 @@ import { IPointPosition } from './Base.interface';
 export class BackgroundLayer extends BaseLayer {
   fillStyle = '#445760';
   cursorPosition?: IPointPosition = { x: 300, y: 300 };
-  radius = 100;
+  radius = window.mouseClick?.initialRadius ?? 100;
   minRadius = 20;
   maxRadius = 300;
 
@@ -33,6 +33,10 @@ export class BackgroundLayer extends BaseLayer {
 
   mouseWheel(e: WheelEvent) {
     const { deltaY } = e;
+    if (window.mouseClick) {
+      void window.mouseClick.adjustRadius(deltaY).catch((error) => console.error(error));
+      return;
+    }
     const radius = deltaY + this.radius;
     this.radius =
       deltaY > 0

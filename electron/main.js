@@ -12,10 +12,14 @@ const {
 } = require('electron');
 const { globalShortcut } = require('electron/main');
 const path = require('path');
+const { createApertureSettings } = require('./aperture-settings');
 
 const isDev = process.env.IS_DEV === 'true';
 
 let highlightWindow = null;
+let settingsWindow = null;
+let apertureSettings = null;
+let radiusState = null;
 // gray mask
 app.disableHardwareAcceleration();
 
@@ -61,6 +65,12 @@ function createHighlightWindow() {
     skipTaskbar: true,
     webPreferences: {
       preload: __dirname + '/preload.js',
+      contextIsolation: true,
+      nodeIntegration: false,
+      additionalArguments: [
+        '--mouse-click-window=highlight',
+        `--mouse-click-initial-radius=${apertureSettings.get()}`,
+      ],
     },
     allowRunningInsecureContent: true,
   });
@@ -84,6 +94,131 @@ function createHighlightWindow() {
   highlightWindow.on('closed', () => {
     highlightWindow = null;
   });
+  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.focus();
+}
+
+function hideHighlightWindow() {
+  if (highlightWindow) highlightWindow.close();
+}
+
+function createSettingsWindow() {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    if (settingsWindow.isMinimized()) settingsWindow.restore();
+    settingsWindow.show();
+    settingsWindow.focus();
+    return;
+  }
+  settingsWindow = new BrowserWindow({
+    width: 520,
+    height: 760,
+    resizable: false,
+    show: false,
+    title: 'Mouse Click · 光圈大小',
+    backgroundColor: '#f6f7f4',
+    webPreferences: {
+      preload: __dirname + '/preload.js',
+      contextIsolation: true,
+      nodeIntegration: false,
+      additionalArguments: [
+        '--mouse-click-window=settings',
+        `--mouse-click-initial-radius=${apertureSettings.get()}`,
+      ],
+    },
+  });
+  // The overlay uses screen-saver level 0; settings must remain usable above it.
+  settingsWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+  settingsWindow.loadURL(
+    isDev
+      ? 'http://localhost:3000/settings.html'
+      : `file://${path.join(__dirname, '../dist/settings.html')}`
+  );
+  settingsWindow.once('ready-to-show', () => {
+    if (settingsWindow && !settingsWindow.isDestroyed()) {
+      settingsWindow.show();
+      settingsWindow.focus();
+    }
+  });
+  settingsWindow.on('closed', () => {
+    settingsWindow = null;
+  });
+}
+
+function apertureMenuItems() {
+  return [
+    { id: 'aperture-settings', label: '光圈大小…', accelerator: 'CommandOrControl+,', click: createSettingsWindow },
+    { id: 'highlight-show', label: '开启光圈', click: createHighlightWindow },
+    { id: 'highlight-hide', label: '收起光圈', click: hideHighlightWindow },
+  ];
+}
+
+function createApplicationMenu() {
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    {
+      label: 'Mouse Click',
+      submenu: [
+        ...apertureMenuItems(),
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit', label: '退出 Mouse Click' },
+      ],
+    },
+    { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
+  ]));
+}
+
+function assertApplicationSender(event) {
+  const trusted = [highlightWindow, settingsWindow].some(
+    (window) => window && !window.isDestroyed() && window.webContents === event.sender
+  );
+  if (!trusted) throw new Error('此窗口不能修改光圈设置');
+}
+
+function publishRadius(method, value) {
+  const result = apertureSettings[method](value);
+  radiusState = {
+    radius: result.radius,
+    saved: result.saved,
+    error: result.error
+      ? result.error instanceof TypeError
+        ? '输入无效，请输入有限数字。'
+        : String(result.error.message)
+      : null,
+    revision: radiusState.revision + 1,
+  };
+  for (const window of [highlightWindow, settingsWindow]) {
+    if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+      window.webContents.send('mouse-click:radius-changed', radiusState);
+    }
+  }
+  return radiusState;
+}
+
+function registerApertureHandlers() {
+  ipcMain.handle('mouse-click:get-radius', (event) => {
+    assertApplicationSender(event);
+    return radiusState;
+  });
+  ipcMain.handle('mouse-click:set-radius', (event, value) => {
+    assertApplicationSender(event);
+    return publishRadius('set', value);
+  });
+  ipcMain.handle('mouse-click:adjust-radius', (event, delta) => {
+    assertApplicationSender(event);
+    return publishRadius('adjust', delta);
+  });
+  ipcMain.handle('mouse-click:show-highlight', (event) => {
+    assertApplicationSender(event);
+    createHighlightWindow();
+  });
+  ipcMain.handle('mouse-click:hide-highlight', (event) => {
+    assertApplicationSender(event);
+    hideHighlightWindow();
+  });
 }
 
 let tray = null;
@@ -96,18 +231,18 @@ function createTray() {
   tray = new Tray(trayIcon.resize({ width: 16 }));
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: 'About Cursor Highlight',
+      label: '关于 Mouse Click',
       click: () =>
         shell.openExternal('https://github.com/Hazyzh/cursor-highlight'),
     },
     { type: 'separator' },
-    { label: 'Highlight Mode', click: () => createHighlightWindow() },
+    ...apertureMenuItems(),
     { type: 'separator' },
     { label: 'Check Update', click: () => checkAppUpdate() },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
-  tray.setToolTip('Cursor Highlight');
+  tray.setToolTip('Mouse Click');
   tray.setContextMenu(contextMenu);
 }
 
@@ -115,6 +250,10 @@ function createTray() {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  apertureSettings = createApertureSettings(path.join(app.getPath('userData'), 'aperture-settings.json'));
+  radiusState = { radius: apertureSettings.get(), saved: null, error: null, revision: 0 };
+  registerApertureHandlers();
+  createApplicationMenu();
   const { wasOpenedAsHidden } = app.getLoginItemSettings();
   if (!wasOpenedAsHidden) {
     createHighlightWindow();
@@ -123,7 +262,7 @@ app.whenReady().then(() => {
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
     // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) createHighlightWindow();
+    if (!highlightWindow) createHighlightWindow();
   });
   globalShortcut.register('Alt+x', () => {
     if (highlightWindow) {
@@ -133,11 +272,8 @@ app.whenReady().then(() => {
       createHighlightWindow();
     }
   });
-  ipcMain.on('close-window', () => {
-    if (highlightWindow) {
-      highlightWindow.close();
-      highlightWindow = null;
-    }
+  ipcMain.on('close-window', (event) => {
+    if (highlightWindow && event.sender === highlightWindow.webContents) hideHighlightWindow();
   });
 
   // Quit when all windows are closed, except on macOS. There, it's common

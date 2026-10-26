@@ -23,3 +23,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local verification results
+coverage-unit/
+coverage-integration/
+/.claude/
+/.codex/
+/test-results/
+.env
+.env.*

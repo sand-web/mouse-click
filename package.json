@@ -1,11 +1,15 @@
 {
   "name": "cursor-highlight",
   "license": "MIT",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "main": "electron/main.js",
   "author": "Harry Hou <hazyzh@qq.com>",
   "description": "This is a utility tool let other guys easily focus on your mouse cursor. Especially effective when you share screen in a meeting session.",
   "scripts": {
+    "test": "node scripts/run-tests.cjs all",
+    "test:unit": "node scripts/run-tests.cjs unit",
+    "test:integration": "node scripts/run-tests.cjs integration",
+    "test:list": "node scripts/run-tests.cjs all --list",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
@@ -30,6 +34,7 @@
     "eslint-plugin-n": "^15.0.0",
     "eslint-plugin-promise": "^6.0.0",
     "events": "^3.3.0",
+    "fast-check": "4.3.0",
     "less": "^4.1.3",
     "typescript": "^4.6.3",
     "vite": "^2.8.0",
@@ -37,7 +42,7 @@
   },
   "build": {
     "appId": "github.com.hazyzh",
-    "productName": "Cursor Highlight",
+    "productName": "Mouse Click",
     "directories": {
       "output": "app_output"
     },
@@ -48,6 +53,12 @@
       "extendInfo": {
         "LSUIElement": 1
       }
-    }
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json",
+      "LICENSE"
+    ]
   }
 }

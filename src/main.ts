@@ -2,6 +2,7 @@ import './style.less';
 
 import { PaletteBox } from './paletteBox';
 import { Main } from './program';
+import { BackgroundLayer } from './layers/Background';
 
 const myPics = <HTMLCanvasElement>document.getElementById('cursorHighlight');
 const paletteBox = new PaletteBox();
@@ -11,3 +12,19 @@ program.init();
 
 window.app = program;
 window.paletteBox = paletteBox;
+
+const bridge = window.mouseClick;
+if (bridge) {
+  const background = Object.values(program.renderLayers).find(
+    (layer) => layer instanceof BackgroundLayer
+  ) as BackgroundLayer;
+  let revision = -1;
+  const applyRadius = (state: ApertureRadiusState) => {
+    if (state.revision < revision) return;
+    revision = state.revision;
+    background.radius = state.radius;
+  };
+  const unsubscribe = bridge.onRadiusChanged(applyRadius);
+  void bridge.getRadius().then(applyRadius).catch((error) => console.error(error));
+  window.addEventListener('beforeunload', unsubscribe, { once: true });
+}
