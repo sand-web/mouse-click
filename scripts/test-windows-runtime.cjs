@@ -108,7 +108,7 @@ class Inspector {
       this.pending.set(id, { resolve, reject, timer });
     });
     this.socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: {
-      expression: '(async()=>{if(!process.mainModule)return null;const e=process.mainModule.require("electron");' + body + '})()',
+      expression: '(async()=>{if(typeof process==="undefined"||!process.mainModule)return null;const e=process.mainModule.require("electron");' + body + '})()',
       awaitPromise: true, returnByValue: true,
     } }));
     const result = await response;
