@@ -48,6 +48,23 @@ class ReadingOracle {
     const file = path.join(this.results, this.label + '-' + prefix + '.png');
     fs.writeFileSync(file, Buffer.from(png, 'base64')); assert.ok(fs.statSync(file).size > 0); return file;
   }
+  async desktopDiagnostic(prefix) {
+    const diagnostic = { at: new Date().toISOString() };
+    try {
+      const desktop = await this.client.evaluate(`
+        const displays=e.screen.getAllDisplays().map(d=>({id:d.id,bounds:d.bounds,workArea:d.workArea,scaleFactor:d.scaleFactor,physicalSize:{width:Math.round(d.size.width*d.scaleFactor),height:Math.round(d.size.height*d.scaleFactor)}}));
+        const thumbnailSize={width:Math.max(...displays.map(d=>d.physicalSize.width)),height:Math.max(...displays.map(d=>d.physicalSize.height))};
+        const sources=await e.desktopCapturer.getSources({types:['screen'],thumbnailSize,fetchWindowIcons:false});
+        return {displays,pointer:e.screen.getCursorScreenPoint(),sources:sources.map(s=>({id:s.id,name:s.name,displayId:s.display_id,size:s.thumbnail.getSize(),png:s.thumbnail.toPNG().toString('base64')}))};`);
+      diagnostic.displays = desktop.displays; diagnostic.pointer = desktop.pointer; diagnostic.screens = [];
+      for (const [index, source] of desktop.sources.entries()) {
+        const file = path.join(this.results, this.label + '-' + prefix + '-screen-' + index + '.png');
+        fs.writeFileSync(file, Buffer.from(source.png, 'base64'));
+        diagnostic.screens.push({ id: source.id, name: source.name, displayId: source.displayId, size: source.size, file, bytes: fs.statSync(file).size });
+      }
+    } catch (error) { diagnostic.error = error.stack || String(error); }
+    return diagnostic;
+  }
   async start(label) {
     this.label = label; this.evidence.label = label;
     try {
@@ -60,10 +77,21 @@ class ReadingOracle {
     this.evidence.reader = { executable, pid: initial.pid, hwnd: initial.hwnd, bounds: initial.bounds };
     this.evidence.probe = this.input({ kind: 'probe' });
     const target = await this.point('native-button');
+    this.evidence.positiveControlDiagnostics = {
+      initial, target,
+      desktopBeforeInput: await this.desktopDiagnostic('before-positive-control'),
+      readerBeforeInput: await this.snapshot().catch(error => ({ diagnosticError: error.stack || String(error) })),
+    };
+    this.save();
     this.input({ kind: 'click', ...target });
     let control;
     try { control = await this.until(() => this.snapshot(), s => s && s.clicks === initial.clicks + 1, label + ' no-overlay native click positive control', 10000); }
-    catch (cause) { const error = new Error('No interactive native input oracle: reader did not receive the positive-control click', { cause }); error.code = 'ENVIRONMENT_NATIVE_INPUT_UNAVAILABLE'; throw error; }
+    catch (cause) {
+      this.evidence.positiveControlDiagnostics.readerAfterTimeout = await this.snapshot().catch(error => ({ diagnosticError: error.stack || String(error) }));
+      this.evidence.positiveControlDiagnostics.desktopAfterTimeout = await this.desktopDiagnostic('after-positive-control-timeout');
+      this.save();
+      const error = new Error('No interactive native input oracle: reader did not receive the positive-control click', { cause }); error.code = 'ENVIRONMENT_NATIVE_INPUT_UNAVAILABLE'; throw error;
+    }
     assert.ok(control.events.some(x => x.type === 'click' && x.trusted && x.target === 'native-button'), 'positive control records a trusted click');
     this.evidence.positiveControl = { before: initial, after: control };
     this.input({ kind: 'click', ...await this.point('native-input') });

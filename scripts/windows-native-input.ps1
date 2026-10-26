@@ -22,6 +22,18 @@ using System.Threading;
 
 public static class MouseClickNativeInput {
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  public sealed class WindowDetails {
+    public string hwnd, title, className, processName, threadDesktop, ownerHwnd, rootHwnd, style, extendedStyle, observationError;
+    public uint processId, threadId, dpi;
+    public int processSessionId = -1;
+    public bool visible, enabled, minimized;
+    public int[] bounds, clientBounds, clientOrigin;
+  }
+  public sealed class WindowObservation {
+    public WindowDetails foreground, cursorWindow, targetWindow;
+    public int[] cursorPosition, targetPosition;
+  }
   [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT {
     public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public UIntPtr dwExtraInfo;
   }
@@ -38,6 +50,21 @@ public static class MouseClickNativeInput {
   [DllImport("user32.dll", SetLastError=true)] static extern uint SendInput(uint count, INPUT[] inputs, int size);
   [DllImport("user32.dll", SetLastError=true)] public static extern bool GetCursorPos(out POINT point);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT point);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int count);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder text, int count);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out RECT rect);
+  [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr window, out RECT rect);
+  [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr window, ref POINT point);
+  [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr window, uint flags);
+  [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr window, uint command);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+  [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr window);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
+  [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr window);
+  [DllImport("user32.dll", EntryPoint="GetWindowLongPtrW")] static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
+  [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint threadId);
   [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
   [DllImport("user32.dll", SetLastError=true)] static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
   [DllImport("user32.dll", SetLastError=true)] static extern bool CloseDesktop(IntPtr desktop);
@@ -49,6 +76,50 @@ public static class MouseClickNativeInput {
   public static int[] VirtualBounds() { return new int[] { GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78), GetSystemMetrics(79) }; }
   public static POINT Position() {
     POINT point; if (!GetCursorPos(out point)) throw new Win32Exception(Marshal.GetLastWin32Error(), "ENVIRONMENT_CURSOR_UNAVAILABLE"); return point;
+  }
+  static string ThreadDesktopName(uint threadId) {
+    IntPtr desktop = GetThreadDesktop(threadId);
+    if (desktop == IntPtr.Zero) return null;
+    int needed; StringBuilder name = new StringBuilder(256);
+    return GetUserObjectInformation(desktop, 2, name, name.Capacity * 2, out needed) ? name.ToString() : null;
+  }
+  static WindowDetails DescribeWindow(IntPtr window) {
+    WindowDetails value = new WindowDetails(); value.hwnd = window.ToInt64().ToString();
+    if (window == IntPtr.Zero) return value;
+    try {
+      StringBuilder title = new StringBuilder(1024), className = new StringBuilder(256);
+      GetWindowText(window, title, title.Capacity); GetClassName(window, className, className.Capacity);
+      value.title = title.ToString(); value.className = className.ToString();
+      uint pid; value.threadId = GetWindowThreadProcessId(window, out pid); value.processId = pid;
+      value.threadDesktop = ThreadDesktopName(value.threadId);
+      value.ownerHwnd = GetWindow(window, 4).ToInt64().ToString(); value.rootHwnd = GetAncestor(window, 2).ToInt64().ToString();
+      value.style = "0x" + GetWindowLongPtr(window, -16).ToInt64().ToString("X");
+      value.extendedStyle = "0x" + GetWindowLongPtr(window, -20).ToInt64().ToString("X");
+      value.visible = IsWindowVisible(window); value.enabled = IsWindowEnabled(window); value.minimized = IsIconic(window);
+      value.dpi = GetDpiForWindow(window);
+      RECT rect;
+      if (GetWindowRect(window, out rect)) value.bounds = new int[] { rect.Left, rect.Top, rect.Right, rect.Bottom };
+      if (GetClientRect(window, out rect)) value.clientBounds = new int[] { rect.Left, rect.Top, rect.Right, rect.Bottom };
+      POINT origin = new POINT();
+      if (ClientToScreen(window, ref origin)) value.clientOrigin = new int[] { origin.X, origin.Y };
+      if (pid != 0) {
+        try { using (Process process = Process.GetProcessById((int)pid)) { value.processName = process.ProcessName; value.processSessionId = process.SessionId; } }
+        catch (Exception error) { value.observationError = error.Message; }
+      }
+    } catch (Exception error) { value.observationError = error.Message; }
+    return value;
+  }
+  // Observation only: never changes focus, input, window ordering, or coordinates.
+  public static WindowObservation ObserveWindows(int x, int y, bool hasTarget) {
+    WindowObservation value = new WindowObservation();
+    value.foreground = DescribeWindow(GetForegroundWindow());
+    POINT cursor = Position(); value.cursorPosition = new int[] { cursor.X, cursor.Y };
+    value.cursorWindow = DescribeWindow(WindowFromPoint(cursor));
+    if (hasTarget) {
+      POINT target = new POINT(); target.X = x; target.Y = y;
+      value.targetPosition = new int[] { x, y }; value.targetWindow = DescribeWindow(WindowFromPoint(target));
+    }
+    return value;
   }
   public static void Prepare() {
     if (IntPtr.Size != 8 || InputSize != 40) throw new Exception("ENVIRONMENT_INPUT_LAYOUT: expected x64 INPUT size 40");
@@ -124,6 +195,15 @@ public static class MouseClickNativeInput {
     if ([double]::IsNaN($number) -or [double]::IsInfinity($number) -or $number -ne [Math]::Truncate($number) -or $number -lt [int]::MinValue -or $number -gt [int]::MaxValue) { throw "NATIVE_INPUT_INVALID_ARGUMENT: invalid $name" }
     return [int]$number
   }
+  function Get-WindowObservation {
+    try {
+      $hasTarget = @('move','click','wheel','drag') -ccontains $action.kind
+      $targetX = 0; $targetY = 0
+      if ($hasTarget) { $targetX = PointValue 'x'; $targetY = PointValue 'y' }
+      return [MouseClickNativeInput]::ObserveWindows($targetX, $targetY, $hasTarget)
+    } catch { return @{observationError=$_.Exception.Message} }
+  }
+  $windowsBefore = Get-WindowObservation
   switch -CaseSensitive ($action.kind) {
     'move' { [MouseClickNativeInput]::Move((PointValue 'x'),(PointValue 'y')) }
     'click' { [MouseClickNativeInput]::Click((PointValue 'x'),(PointValue 'y')) }
@@ -137,7 +217,8 @@ public static class MouseClickNativeInput {
     'probe' { }
   }
   $after = [MouseClickNativeInput]::Position()
-  @{status='PASS';kind=$action.kind;sent=[MouseClickNativeInput]::Sent;expected=[MouseClickNativeInput]::Expected;lastError=[MouseClickNativeInput]::LastError;inputSize=[MouseClickNativeInput]::InputSize;position=@{x=$after.X;y=$after.Y};beforePosition=@{x=$before.X;y=$before.Y};foregroundHwnd=[MouseClickNativeInput]::GetForegroundWindow().ToInt64().ToString();foregroundBefore=$foregroundBefore;desktop=[MouseClickNativeInput]::DesktopName;sessionId=[Diagnostics.Process]::GetCurrentProcess().SessionId;userInteractive=[Environment]::UserInteractive;virtualBounds=[MouseClickNativeInput]::VirtualBounds()} | ConvertTo-Json -Depth 8 -Compress
+  $windowsAfter = Get-WindowObservation
+  @{status='PASS';kind=$action.kind;sent=[MouseClickNativeInput]::Sent;expected=[MouseClickNativeInput]::Expected;lastError=[MouseClickNativeInput]::LastError;inputSize=[MouseClickNativeInput]::InputSize;position=@{x=$after.X;y=$after.Y};beforePosition=@{x=$before.X;y=$before.Y};foregroundHwnd=[MouseClickNativeInput]::GetForegroundWindow().ToInt64().ToString();foregroundBefore=$foregroundBefore;desktop=[MouseClickNativeInput]::DesktopName;sessionId=[Diagnostics.Process]::GetCurrentProcess().SessionId;userInteractive=[Environment]::UserInteractive;virtualBounds=[MouseClickNativeInput]::VirtualBounds();windowsBefore=$windowsBefore;windowsAfter=$windowsAfter} | ConvertTo-Json -Depth 8 -Compress
 } catch {
   $message = $_.Exception.Message
   $code = 'ENVIRONMENT_NATIVE_INPUT_DRIVER'
