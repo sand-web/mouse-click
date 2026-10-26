@@ -126,7 +126,11 @@ function createSettingsWindow() {
     },
   });
   // The overlay uses screen-saver level 0; settings must remain usable above it.
-  settingsWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+  if (process.platform === MacOS) {
+    settingsWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+  } else {
+    settingsWindow.setAlwaysOnTop(true, 'screen-saver');
+  }
   settingsWindow.loadURL(
     isDev
       ? 'http://localhost:3000/settings.html'
@@ -276,11 +280,9 @@ app.whenReady().then(() => {
     if (highlightWindow && event.sender === highlightWindow.webContents) hideHighlightWindow();
   });
 
-  // Quit when all windows are closed, except on macOS. There, it's common
-  // for applications and their menu bar to stay active until the user quits
-  // explicitly with Cmd + Q.
+  // Keep the tray and shortcut available after hiding the last window.
   app.on('window-all-closed', function () {
-    if (process.platform !== MacOS) app.quit();
+    if (process.platform !== MacOS && process.platform !== Windows) app.quit();
   });
 
   createTray();
