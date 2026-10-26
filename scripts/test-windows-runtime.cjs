@@ -229,7 +229,7 @@ async function smoke(kind, executable, expectedAsarHash) {
     stage = kind + ' zero-window round ' + round;
     const cycle = { round, pid: metadata.pid, aliveSamples: [] };
     result.zeroWindow.push(cycle);
-    cycle.scheduled = await client.evaluate('setTimeout(()=>{for(const w of e.BrowserWindow.getAllWindows())w.close();},50);return {pid:process.pid,at:Date.now()};');
+    cycle.scheduled = await client.evaluate('setTimeout(()=>{const settings=e.BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().includes("settings.html"));if(settings)settings.close();const item=e.Menu.getApplicationMenu().getMenuItemById("highlight-hide");if(!item)throw Error("Missing highlight-hide menu item");item.click(item,e.BrowserWindow.getFocusedWindow());},50);return {pid:process.pid,at:Date.now()};');
     // Node can wait for an attached debugger during app.quit(). Disconnect BEFORE
     // observing survival, otherwise the old window-all-closed bug can falsely pass.
     await client.disconnect();
@@ -353,6 +353,7 @@ async function main() {
   try {
     assert.equal(process.platform, 'win32', 'Windows runtime verification requires a real Windows host; this is not a skipped PASS');
     assert.equal(process.arch, 'x64', 'Windows runtime verification requires an x64 host');
+    assert.ok(process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted', 'Runtime checks require a disposable GitHub-hosted runner, not a personal Windows account');
     assert.equal(typeof WebSocket, 'function', 'the Windows driver requires Node 24 WebSocket support');
     const packages = JSON.parse(fs.readFileSync(path.join(results, 'package-checks.json'), 'utf8'));
     assert.equal(packages.status, 'PASS', 'real package and silent installation checks passed');

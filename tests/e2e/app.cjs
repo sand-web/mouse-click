@@ -5,6 +5,9 @@ const fs = require('fs');
 const path = require('path');
 const testData = process.env.MOUSE_CLICK_E2E_DATA;
 assert.ok(testData && path.isAbsolute(testData), 'isolated test data path required');
+if (process.platform === 'win32') {
+  assert.ok(process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted', 'Windows test packages only run in disposable GitHub-hosted CI');
+}
 const resultFile = process.env.MOUSE_CLICK_E2E_RESULT || path.join(testData, 'e2e-result.json');
 assert.ok(path.isAbsolute(resultFile), 'absolute test report path required');
 const reportDirectory = path.dirname(resultFile);

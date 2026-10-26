@@ -71,6 +71,7 @@ async function main() {
   try {
     assert.equal(process.platform, 'win32', 'Windows package checks require a real Windows host; this is not a skipped PASS');
     assert.equal(process.arch, 'x64', 'Windows x64 package checks require an x64 host');
+    assert.ok(process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted', 'Installation checks require a disposable GitHub-hosted runner, not a personal Windows account');
     const version = require('../package.json').version;
     report.version = version;
     const names = ['Setup', 'Portable'].map((kind) => 'Mouse-Click-' + version + '-x64-' + kind + '.exe');

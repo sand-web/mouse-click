@@ -33,10 +33,11 @@ yarn install --frozen-lockfile
 yarn typecheck
 yarn test
 yarn build:windows
-yarn test:windows
 ```
 
 Windows 构建必须在 Windows 中执行；GitHub Actions 提供 Windows Server 2022 环境。它生成安装版、便携版和 `SHA256SUMS.txt`，并检查真实生产包及单独的运行测试包。
+
+安装和运行验收脚本只允许在一次性 GitHub-hosted runner 中执行。它们会静默安装测试应用并清理测试启动项；个人 Windows 电脑直接安装发布版体验即可，不运行 `yarn test:windows`。
 
 正式包只包含应用文件和许可证，不包含测试入口、本机日志或开发依赖。运行检查的证据保存在 Actions 的 `windows-test-evidence` 产物中，安装包为 `mouse-click-windows-x64`。Releases 仅在检查后发布。
 
