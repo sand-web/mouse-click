@@ -5,16 +5,46 @@ const fs = require('fs');
 const path = require('path');
 const testData = process.env.MOUSE_CLICK_E2E_DATA;
 assert.ok(testData && path.isAbsolute(testData), 'isolated test data path required');
+const resultFile = process.env.MOUSE_CLICK_E2E_RESULT || path.join(testData, 'e2e-result.json');
+assert.ok(path.isAbsolute(resultFile), 'absolute test report path required');
+const reportDirectory = path.dirname(resultFile);
+const reportPrefix = process.env.MOUSE_CLICK_E2E_RESULT ? path.basename(resultFile, path.extname(resultFile)) + '-' : '';
+const expectedRadius = process.env.MOUSE_CLICK_E2E_EXPECT_RADIUS === undefined ? undefined : Number(process.env.MOUSE_CLICK_E2E_EXPECT_RADIUS);
+const finalRadius = process.env.MOUSE_CLICK_E2E_FINAL_RADIUS === undefined ? undefined : Number(process.env.MOUSE_CLICK_E2E_FINAL_RADIUS);
+for (const radius of [expectedRadius, finalRadius]) {
+  assert.ok(radius === undefined || (Number.isFinite(radius) && radius >= 20 && radius <= 300), 'valid requested test radius');
+}
+const phase = process.env.MOUSE_CLICK_E2E_PHASE || (expectedRadius === undefined ? 'full' : 'resume');
+fs.mkdirSync(reportDirectory, { recursive: true });
 app.setPath('userData', testData);
 require('../../electron/main.js');
 
 const checks = [];
 let stage = 'startup';
+let intentionalExit = false;
+function report(value) {
+  fs.writeFileSync(resultFile, JSON.stringify({
+    pid: process.pid, platform: process.platform, electron: process.versions.electron,
+    phase, userData: app.getPath('userData'), appPath: app.getAppPath(), execPath: process.execPath,
+    stage, checks, ...value,
+  }, null, 2));
+}
+function exit(code) {
+  intentionalExit = true;
+  // This harness is only packaged for the disposable CI test process.
+  if (process.platform === 'win32') app.setLoginItemSettings({ openAtLogin: false });
+  app.exit(code);
+}
+app.on('before-quit', () => {
+  if (!intentionalExit) {
+    report({ status: 'FAIL', error: 'Application unexpectedly quit before the test completed' });
+  }
+});
 const deadline = setTimeout(() => {
   fs.mkdirSync(testData, { recursive: true });
-  fs.writeFileSync(path.join(testData, 'e2e-result.json'), JSON.stringify({ status: 'FAIL', stage, error: 'test-driver timeout', checks }, null, 2));
+  report({ status: 'FAIL', error: 'test-driver timeout' });
   console.error('E2E timeout at ' + stage);
-  app.exit(1);
+  exit(1);
 }, 90000);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(read, accept, label) {
@@ -64,7 +94,7 @@ async function agrees(window, expected) {
   }
   assert.equal(JSON.parse(fs.readFileSync(path.join(testData, 'aperture-settings.json'))).radius, expected);
   checks.push({ radius: expected, view });
-  fs.writeFileSync(path.join(testData, 'e2e-progress.json'), JSON.stringify({ stage, checks }, null, 2));
+  fs.writeFileSync(path.join(reportDirectory, reportPrefix + 'e2e-progress.json'), JSON.stringify({ pid: process.pid, phase, stage, checks }, null, 2));
   return view;
 }
 async function setSlider(window, radius) {
@@ -87,6 +117,25 @@ app.whenReady().then(async () => {
     let settings = await openSettings();
     menu('aperture-settings');
     assert.equal(BrowserWindow.getAllWindows().filter((w) => w.webContents.getURL().includes('settings.html')).length, 1, 'settings singleton');
+    let startup;
+    let operations;
+    let failedView;
+    if (expectedRadius !== undefined) {
+      // Read the restored state before any write: a pre-test set would hide broken persistence.
+      const view = await observe(settings);
+      const canvasRadius = await until(() => overlayWindow().webContents.executeJavaScript('window.app && Object.values(window.app.renderLayers).find(x => typeof x.radius === "number")?.radius'), Number.isFinite, 'restored canvas initialized');
+      const diskRadius = JSON.parse(fs.readFileSync(path.join(testData, 'aperture-settings.json'), 'utf8')).radius;
+      startup = { view, canvasRadius, diskRadius, expectedRadius };
+      assert.equal(view.state.radius, expectedRadius, 'restored IPC radius before writes');
+      assert.equal(view.slider, expectedRadius, 'restored slider before writes');
+      assert.equal(view.number, expectedRadius, 'restored number before writes');
+      assert.ok(Math.abs(view.previewWidth - expectedRadius * 0.64) < 0.1, 'restored preview before writes');
+      assert.equal(canvasRadius, expectedRadius, 'restored canvas before writes');
+      assert.equal(diskRadius, expectedRadius, 'restored disk radius before writes');
+      checks.push({ restored: true, radius: expectedRadius, view });
+      fs.writeFileSync(path.join(reportDirectory, reportPrefix + 'startup-settings.png'), (await settings.webContents.capturePage()).toPNG());
+      fs.writeFileSync(path.join(reportDirectory, reportPrefix + 'startup-overlay.png'), (await overlayWindow().webContents.capturePage()).toPNG());
+    } else {
     for (const radius of [20, 137, 300]) await setSlider(settings, radius);
     await precise(settings, 137.125);
     await wheel(settings, 0.25, 137.375);
@@ -95,7 +144,7 @@ app.whenReady().then(async () => {
 
     const sourceRequire = require('module').createRequire(path.join(process.env.MOUSE_CLICK_SOURCE, 'package.json'));
     const fc = sourceRequire('fast-check');
-    const operations = fc.sample(fc.array(fc.oneof(
+    operations = fc.sample(fc.array(fc.oneof(
       fc.record({ kind: fc.constant('set'), value: fc.integer({ min: 20, max: 300 }) }),
       fc.record({ kind: fc.constant('wheel'), value: fc.integer({ min: -8, max: 8 }).map((v) => v / 4) })
     ), { minLength: 5, maxLength: 8 }), { seed: 20261025, numRuns: 1 })[0];
@@ -140,7 +189,7 @@ app.whenReady().then(async () => {
     assert.equal(failure.radius, 180);
     assert.equal(failure.saved, false);
     assert.ok(failure.error);
-    const failedView = await until(() => observe(settings), (v) => v.state.radius === 180 && /未保存|无法保存|保存失败/.test(v.status), 'visible save failure');
+    failedView = await until(() => observe(settings), (v) => v.state.radius === 180 && /未保存|无法保存|保存失败/.test(v.status), 'visible save failure');
     assert.deepEqual(fs.readFileSync(file), preserved);
     fs.renameSync(file + '.tmp', file + '.blocked-archive');
     await settings.webContents.executeJavaScript('window.mouseClick.setRadius(180)');
@@ -148,17 +197,23 @@ app.whenReady().then(async () => {
     const stable = await observe(settings);
     await sleep(250);
     assert.equal((await observe(settings)).state.revision, stable.state.revision, 'no update loop');
-    fs.writeFileSync(path.join(testData, 'settings.png'), (await settings.webContents.capturePage()).toPNG());
-    const report = { status: 'PASS', seed: 20261025, operations, checks, failedView };
-    fs.writeFileSync(path.join(testData, 'e2e-result.json'), JSON.stringify(report, null, 2));
+    }
+    if (finalRadius !== undefined) await precise(settings, finalRadius);
+    const radius = (await observe(settings)).state.radius;
+    const settingsScreenshot = path.join(reportDirectory, reportPrefix + 'settings.png');
+    const overlayScreenshot = path.join(reportDirectory, reportPrefix + 'overlay.png');
+    fs.writeFileSync(settingsScreenshot, (await settings.webContents.capturePage()).toPNG());
+    fs.writeFileSync(overlayScreenshot, (await overlayWindow().webContents.capturePage()).toPNG());
+    report({ status: 'PASS', seed: 20261025, operations, failedView, startup, radius,
+      expectedRadius, finalRadius, screenshots: { settings: settingsScreenshot, overlay: overlayScreenshot } });
     console.log('MOUSE_CLICK_E2E_PASS ' + checks.length + ' real-window state checks');
     clearTimeout(deadline);
-    app.exit(0);
+    exit(0);
   } catch (error) {
     fs.mkdirSync(testData, { recursive: true });
-    fs.writeFileSync(path.join(testData, 'e2e-result.json'), JSON.stringify({ status: 'FAIL', error: error.stack, checks }, null, 2));
+    report({ status: 'FAIL', error: error.stack });
     console.error(error.stack);
     clearTimeout(deadline);
-    app.exit(1);
+    exit(1);
   }
 });

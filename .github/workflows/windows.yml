@@ -1,0 +1,61 @@
+name: Windows build and runtime checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24'
+      - name: Use locked Yarn version
+        run: npm install --global yarn@1.22.22
+      - name: Install locked dependencies
+        run: yarn install --frozen-lockfile --non-interactive
+      - name: Check application types
+        run: yarn typecheck
+      - name: Test settings behavior and real file persistence
+        run: yarn test
+      - name: Build Windows installer and portable app
+        run: yarn build:windows
+      - name: Check production packages and install the app
+        run: node scripts/check-windows-packages.cjs
+      - name: Build separate runtime test package
+        run: node scripts/build-windows.cjs --test-package
+      - name: Test real Windows startup, lifecycle, and restart persistence
+        run: node scripts/test-windows-runtime.cjs
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: windows-test-evidence
+          path: test-results/windows
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Upload verified Windows executables
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: mouse-click-windows-x64
+          path: |
+            app_output/Mouse-Click-*-x64-Setup.exe
+            app_output/Mouse-Click-*-x64-Portable.exe
+            app_output/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
