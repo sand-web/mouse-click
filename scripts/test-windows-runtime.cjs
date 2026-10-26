@@ -108,7 +108,7 @@ class Inspector {
       this.pending.set(id, { resolve, reject, timer });
     });
     this.socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: {
-      expression: '(async()=>{const e=process.mainModule.require("electron");' + body + '})()',
+      expression: '(async()=>{if(!process.mainModule)return null;const e=process.mainModule.require("electron");' + body + '})()',
       awaitPromise: true, returnByValue: true,
     } }));
     const result = await response;
@@ -141,7 +141,11 @@ async function connect(port, processRecord) {
     socket.addEventListener('open', resolve, { once: true });
     socket.addEventListener('error', () => reject(new Error('Unable to connect to the own-process inspector')), { once: true });
   }), 10000, 'inspector websocket open');
-  return new Inspector(socket);
+  const client = new Inspector(socket);
+  // The inspector port opens before Electron's CommonJS entry has initialized.
+  try { await until(() => client.evaluate('return true;'), value => value === true, 'own process main module ready'); }
+  catch (error) { await client.disconnect().catch(() => {}); throw error; }
+  return client;
 }
 const metadataBody = 'return {pid:process.pid,platform:process.platform,electron:process.versions.electron,ready:e.app.isReady(),packaged:e.app.isPackaged,appPath:e.app.getAppPath(),execPath:process.execPath,userData:e.app.getPath("userData"),name:e.app.getName(),version:e.app.getVersion(),portableFile:process.env.PORTABLE_EXECUTABLE_FILE||null};';
 const windowsBody = 'return e.BrowserWindow.getAllWindows().map(w=>({id:w.id,url:w.webContents.getURL(),visible:w.isVisible(),destroyed:w.isDestroyed()}));';
