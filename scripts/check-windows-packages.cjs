@@ -24,7 +24,7 @@ function inspectAsar(file) {
     assert.ok(/^(electron|dist)(\/|$)|^(package\.json|LICENSE)$/.test(entry), 'only production resources: ' + entry);
     assert.ok(!/(^|\/)(tests|\.claude|coverage[^/]*)(\/|$)/i.test(entry), 'no test or local report resources: ' + entry);
     if (/\.(js|cjs|mjs|json|html|css|map|txt)$/i.test(entry)) {
-      const content = asar.extractFile(file, entry).toString('utf8');
+      const content = asar.extractFile(file, path.join(...entry.split('/'))).toString('utf8');
       assert.ok(!/\/Users\/[^/]+\//.test(content), 'no private machine path in ' + entry);
     }
   }
