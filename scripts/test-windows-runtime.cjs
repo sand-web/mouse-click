@@ -51,7 +51,9 @@ function launch(executable, args, logName, extraEnv = {}) {
   delete environment.ELECTRON_RUN_AS_NODE;
   delete environment.NODE_OPTIONS;
   delete environment.IS_DEV;
-  const child = spawn(executable, args, { env: environment, windowsHide: true, cwd: root });
+  // GUI executables must be shown: windowsHide also passes SW_HIDE to their
+  // first ShowWindow call, leaving a rendered but invisible native test target.
+  const child = spawn(executable, args, { env: environment, windowsHide: false, cwd: root });
   if (child.pid) ownedProcesses.add(child.pid);
   const log = fs.createWriteStream(path.join(results, logName));
   child.stdout.pipe(log, { end: false });
