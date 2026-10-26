@@ -109,7 +109,18 @@ async function precise(window, radius) {
   return agrees(window, radius);
 }
 async function wheel(window, delta, expected) {
+  // Reading no longer uses the wheel as a size shortcut. This specification
+  // change is intentional; the user needs the real wheel for the page below.
+  const before = await observe(window);
+  const file = path.join(testData, 'aperture-settings.json');
+  const beforeBytes = fs.readFileSync(file);
+  assert.equal(before.state.radius, expected, 'wheel starts from the current requested radius');
   await overlayWindow().webContents.executeJavaScript(`document.querySelector('canvas').dispatchEvent(new WheelEvent('wheel',{deltaY:${delta},bubbles:true}))`);
+  await sleep(120);
+  const after = await observe(window);
+  assert.equal(after.state.radius, before.state.radius, 'ordinary wheel must keep the chosen radius');
+  assert.equal(after.state.revision, before.state.revision, 'ordinary wheel must not publish a size change');
+  assert.deepEqual(fs.readFileSync(file), beforeBytes, 'ordinary wheel must preserve saved bytes');
   return agrees(window, expected);
 }
 
@@ -118,6 +129,16 @@ app.whenReady().then(async () => {
     await until(async () => overlayWindow(), Boolean, 'initial overlay');
     await loaded(overlayWindow());
     let settings = await openSettings();
+    if (process.platform === 'win32' && expectedRadius === undefined) {
+      // Establish real foreground input before programmatic mode transitions;
+      // Windows may otherwise reject focus changes from a background process.
+      const { runInput } = require(path.join(process.env.MOUSE_CLICK_SOURCE, 'scripts/windows-native-input.cjs'));
+      const bounds = settings.getBounds();
+      const point = require('electron').screen.dipToScreenPoint({ x: Math.round(bounds.x + bounds.width / 2), y: bounds.y + 12 });
+      const input = runInput({ kind: 'click', ...point }, reportDirectory, phase + '-settings-foreground');
+      assert.equal(input.sent, input.expected, 'native foreground setup input was delivered');
+      await until(async () => settings.isFocused(), Boolean, 'settings receives real foreground input');
+    }
     menu('aperture-settings');
     assert.equal(BrowserWindow.getAllWindows().filter((w) => w.webContents.getURL().includes('settings.html')).length, 1, 'settings singleton');
     let startup;
@@ -141,9 +162,13 @@ app.whenReady().then(async () => {
     } else {
     for (const radius of [20, 137, 300]) await setSlider(settings, radius);
     await precise(settings, 137.125);
-    await wheel(settings, 0.25, 137.375);
+    await wheel(settings, 0.25, 137.125);
     await setSlider(settings, 180);
-    await wheel(settings, -0.5, 179.5);
+    await wheel(settings, -0.5, 180);
+    for (const radius of [20, 137.125, 300]) {
+      await precise(settings, radius);
+      for (const delta of [4, -4, 0]) await wheel(settings, delta, radius);
+    }
 
     const sourceRequire = require('module').createRequire(path.join(process.env.MOUSE_CLICK_SOURCE, 'package.json'));
     const fc = sourceRequire('fast-check');
@@ -151,15 +176,31 @@ app.whenReady().then(async () => {
       fc.record({ kind: fc.constant('set'), value: fc.integer({ min: 20, max: 300 }) }),
       fc.record({ kind: fc.constant('wheel'), value: fc.integer({ min: -8, max: 8 }).map((v) => v / 4) })
     ), { minLength: 5, maxLength: 8 }), { seed: 20261025, numRuns: 1 })[0];
-    let expected = 179.5;
+    let expected = 300;
     for (const operation of operations) {
       if (operation.kind === 'set') {
         expected = operation.value;
         await setSlider(settings, expected);
       } else {
-        expected = Math.min(300, Math.max(20, expected + operation.value));
         await wheel(settings, operation.value, expected);
       }
+    }
+    for (let round = 1; round <= 2; round++) {
+      stage = 'drawing-to-reading keyboard focus round ' + round;
+      const overlay = overlayWindow();
+      const beforeMode = await observe(settings);
+      const beforeModeBytes = fs.readFileSync(path.join(testData, 'aperture-settings.json'));
+      menu('drawing-mode');
+      await until(async () => overlay.isFocused(), Boolean, 'drawing window takes keyboard focus');
+      assert.equal(overlay.isFocused(), true, 'drawing mode receives keyboard focus');
+      menu('reading-mode');
+      await sleep(150);
+      assert.equal(overlay.isFocused(), false, 'reading mode releases drawing window keyboard focus');
+      const afterMode = await observe(settings);
+      assert.equal(afterMode.state.radius, beforeMode.state.radius, 'mode changes preserve the chosen radius');
+      assert.equal(afterMode.state.revision, beforeMode.state.revision, 'mode changes do not publish size updates');
+      assert.deepEqual(fs.readFileSync(path.join(testData, 'aperture-settings.json')), beforeModeBytes, 'mode changes preserve saved size bytes');
+      checks.push({ modeRound: round, drawingFocused: true, readingFocused: overlay.isFocused(), radius: afterMode.state.radius });
     }
     const closedSettings = settings;
     closedSettings.close();

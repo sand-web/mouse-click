@@ -6,6 +6,7 @@ const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { fileURLToPath } = require('node:url');
 const { inspectAsar, sha256 } = require('./check-windows-packages.cjs');
+const { ReadingOracle } = require('./windows-reading-oracle.cjs');
 
 const root = path.resolve(__dirname, '..');
 const results = path.join(root, 'test-results', 'windows');
@@ -15,6 +16,7 @@ const normalPath = (value) => path.resolve(value).toLowerCase();
 const ownedProcesses = new Set();
 let activeClient;
 let activeMainPid;
+let activeOracle;
 let stage = 'startup';
 const report = {
   status: 'RUNNING', platform: process.platform, arch: process.arch,
@@ -185,6 +187,9 @@ async function screenshots(client, prefix) {
 }
 
 async function smoke(kind, executable, expectedAsarHash) {
+  const oracle = new ReadingOracle({ root, results, launch, connect, freePort, until, clickMenu });
+  activeOracle = oracle;
+  await oracle.start(kind);
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'mouse-click-' + kind + '-'));
   const port = await freePort();
   const child = launch(executable, ['--inspect=127.0.0.1:' + port, '--user-data-dir=' + data], kind + '.log');
@@ -211,6 +216,7 @@ async function smoke(kind, executable, expectedAsarHash) {
   // Undo this process's packaged-app startup registration before any possible test failure.
   await client.evaluate('e.app.setLoginItemSettings({openAtLogin:false});return true;');
   await until(() => client.evaluate(windowsBody), (value) => value.some((item) => item.url.includes('index.html')), kind + ' initial overlay');
+  result.initialReadingFocus = await oracle.checkInitialFocus(client);
   await clickMenu(client, 'aperture-settings');
   await until(() => readView(client), (value) => value && Number.isFinite(value.canvas), kind + ' rendered windows');
   for (const window of await client.evaluate(windowsBody)) {
@@ -224,6 +230,8 @@ async function smoke(kind, executable, expectedAsarHash) {
   for (const radius of [20, 137.125, 300]) result.states.push({ radius, view: await setRadius(client, data, radius) });
   result.screenshots = await screenshots(client, kind);
   await setRadius(client, data, 137.125);
+  result.nativeReading = await oracle.validate(client, data, kind);
+  saveReport();
 
   for (let round = 1; round <= 2; round++) {
     stage = kind + ' zero-window round ' + round;
@@ -271,7 +279,39 @@ async function smoke(kind, executable, expectedAsarHash) {
   assert.equal(result.exit.code, 0, 'production launcher exits successfully');
   result.status = 'PASS';
   activeMainPid = null;
+  await oracle.close();
+  activeOracle = null;
   saveReport();
+}
+
+async function previousReleaseBaseline() {
+  stage = 'previous release native reading baseline';
+  const executable = path.join(root, 'app_output', 'baseline-1.0.4', 'Mouse-Click-1.0.4-x64-Portable.exe');
+  assert.equal(sha256(executable), '3574a5361528644c84f2773d183c91bf3d2cc4919aca38dcf91897c3d245dff4', 'baseline is the original published portable EXE');
+  const oracle = new ReadingOracle({ root, results, launch, connect, freePort, until, clickMenu });
+  activeOracle = oracle;
+  await oracle.start('baseline');
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'mouse-click-old-reading-'));
+  const port = await freePort();
+  const child = launch(executable, ['--inspect=127.0.0.1:' + port, '--user-data-dir=' + data], 'previous-release.log');
+  const client = await connect(port, child);
+  activeClient = client;
+  const metadata = await until(() => client.evaluate(metadataBody), (value) => value.ready, 'previous release ready');
+  activeMainPid = metadata.pid;
+  ownedProcesses.add(metadata.pid);
+  assert.equal(metadata.version, '1.0.4', 'baseline runtime is the published old version');
+  await client.evaluate('e.app.setLoginItemSettings({openAtLogin:false});return true;');
+  report.readingBaseline = { metadata, evidence: await oracle.observeLegacy(client, data) };
+  saveReport();
+  await client.evaluate('setTimeout(()=>e.app.quit(),50);return true;');
+  await client.disconnect();
+  activeClient = null;
+  await until(() => alive(metadata.pid), (value) => !value, 'previous release exits');
+  assert.equal((await bounded(child.completed, 30000, 'previous portable launcher exits')).code, 0);
+  ownedProcesses.delete(metadata.pid);
+  activeMainPid = null;
+  await oracle.close();
+  activeOracle = null;
 }
 
 async function restartTests() {
@@ -334,18 +374,25 @@ async function restartTests() {
 }
 
 async function cleanup() {
+  let readerCleanupError;
   if (activeClient) {
     try { await activeClient.evaluate('e.app.setLoginItemSettings({openAtLogin:false});setTimeout(()=>e.app.quit(),50);return true;'); } catch {}
     try { await activeClient.disconnect(); } catch {}
     activeClient = null;
   }
   if (activeMainPid) await sleep(300);
+  if (activeOracle) {
+    try { await activeOracle.close(); }
+    catch (error) { readerCleanupError = error; }
+    finally { activeOracle = null; }
+  }
   // Only descendants launched by this script are eligible for forced teardown.
   for (const pid of ownedProcesses) {
     if (!alive(pid)) continue;
     const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
     await bounded(new Promise((resolve) => { killer.once('close', resolve); killer.once('error', resolve); }), 10000, 'own process cleanup');
   }
+  if (readerCleanupError) throw readerCleanupError;
 }
 
 async function main() {
@@ -359,16 +406,18 @@ async function main() {
     assert.equal(packages.status, 'PASS', 'real package and silent installation checks passed');
     assert.equal(packages.commit, process.env.GITHUB_SHA || null, 'package evidence belongs to this commit');
     for (const artifact of packages.artifacts) assert.equal(sha256(artifact.path), artifact.sha256, 'checked EXE bytes have not changed');
+    await previousReleaseBaseline();
     await smoke('installed', packages.installed.executable, packages.production.asar.sha256);
     const portable = packages.artifacts.find((item) => item.fileName.endsWith('-Portable.exe'));
     assert.ok(portable, 'checked portable artifact exists');
     await smoke('portable', portable.path, packages.production.asar.sha256);
     await restartTests();
     report.status = 'PASS';
-    console.log('WINDOWS_RUNTIME_CHECKS_PASS installed + portable + three independent test starts');
+    console.log('WINDOWS_RUNTIME_CHECKS_PASS native reading input + installed + portable + three independent test starts');
   } catch (error) {
     report.status = 'FAIL';
-    report.failureKind = error.code === 'PRODUCT_ZERO_WINDOW_EXIT' ? 'product-zero-window-exit' : 'test-or-runtime-failure';
+    report.failureKind = error.code?.startsWith('ENVIRONMENT_') ? 'environment-native-input' : error.code === 'PRODUCT_ZERO_WINDOW_EXIT' ? 'product-zero-window-exit' : 'test-or-runtime-failure';
+    if (error.evidence) report.failureEvidence = error.evidence;
     report.reason = error.stack || String(error);
     console.error(report.reason);
     process.exitCode = 1;

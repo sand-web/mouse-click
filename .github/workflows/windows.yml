@@ -38,6 +38,16 @@ jobs:
         run: node scripts/check-windows-packages.cjs
       - name: Build separate runtime test package
         run: node scripts/build-windows.cjs --test-package
+      - name: Build independent native reading fixture
+        run: node scripts/build-windows.cjs --reader-fixture
+      - name: Fetch verified previous release for the reading regression baseline
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path app_output/baseline-1.0.4 -Force | Out-Null
+          $baselineFile = 'app_output/baseline-1.0.4/Mouse-Click-1.0.4-x64-Portable.exe'
+          Invoke-WebRequest -Uri 'https://github.com/sand-web/mouse-click/releases/download/v1.0.4/Mouse-Click-1.0.4-x64-Portable.exe' -OutFile $baselineFile
+          $baselineHash = (Get-FileHash $baselineFile -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($baselineHash -ne '3574a5361528644c84f2773d183c91bf3d2cc4919aca38dcf91897c3d245dff4') { throw 'Previous release SHA256 mismatch' }
       - name: Test real Windows startup, lifecycle, and restart persistence
         run: node scripts/test-windows-runtime.cjs
       - name: Upload runtime evidence

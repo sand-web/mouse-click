@@ -24,24 +24,11 @@ export class BackgroundLayer extends BaseLayer {
 
   public init() {
     this.canvas.addEventListener('mousemove', (e) => this.mouseMove(e));
-    this.canvas.addEventListener('wheel', (e) => this.mouseWheel(e));
   }
 
   mouseMove(e: MouseEvent) {
+    if (window.mouseClick && document.documentElement.dataset.interactionMode === 'reading') return;
     this.cursorPosition = { x: e.offsetX, y: e.offsetY };
-  }
-
-  mouseWheel(e: WheelEvent) {
-    const { deltaY } = e;
-    if (window.mouseClick) {
-      void window.mouseClick.adjustRadius(deltaY).catch((error) => console.error(error));
-      return;
-    }
-    const radius = deltaY + this.radius;
-    this.radius =
-      deltaY > 0
-        ? Math.min(this.maxRadius, radius)
-        : Math.max(this.minRadius, radius);
   }
 
   public draw() {

@@ -5,6 +5,10 @@ interface Window {
   paletteBox: any;
   mouseClick?: {
     readonly initialRadius: number;
+    readonly initialInteractionMode: 'reading' | 'drawing';
+    getInteractionMode(): Promise<'reading' | 'drawing'>;
+    onInteractionModeChanged(callback: (mode: 'reading' | 'drawing') => void): () => void;
+    onCursorPosition(callback: (position: { x: number; y: number }) => void): () => void;
     getRadius(): Promise<ApertureRadiusState>;
     setRadius(value: unknown): Promise<ApertureRadiusState>;
     adjustRadius(delta: unknown): Promise<ApertureRadiusState>;

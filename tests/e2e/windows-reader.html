@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<title>Mouse Click Windows Reading Fixture</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 22px; color: #193a31; background: #faf9f4; font: 18px system-ui; overflow: hidden; }
+  h1 { font-size: 27px; margin: 0 0 10px; }
+  p { margin: 12px 0; }
+  .controls { display: flex; gap: 14px; align-items: center; }
+  button, input { font: 18px system-ui; padding: 10px; }
+  input { width: 420px; min-width: 160px; }
+  #native-text { display: inline-block; font: 24px/1.4 monospace; white-space: pre; user-select: text; }
+  #native-scroll { height: min(310px, calc(100vh - 280px)); min-height: 120px; overflow-y: scroll; border: 3px solid #20836d; padding: 0 20px; background: white; }
+  #native-scroll p { line-height: 1.55; }
+  #native-scroll::-webkit-scrollbar { width: 24px; }
+  #native-scroll::-webkit-scrollbar-track { background: #d9e9e2; }
+  #native-scroll::-webkit-scrollbar-thumb { background: #20836d; border: 3px solid #d9e9e2; border-radius: 12px; min-height: 32px; }
+</style>
+<h1>Mouse Click Windows Reading Fixture</h1>
+<p>Native scrolling, clicking, selection and keyboard input must reach this page.</p>
+<div class="controls"><button id="native-button">Clicks: 0</button><input id="native-input" aria-label="Native keyboard target" placeholder="Native keyboard target"></div>
+<p><span id="native-text">Mouse Click reading test.</span></p>
+<div id="native-scroll" tabindex="0" aria-label="Native scroll target"></div>
+<script>
+  const scroller = document.getElementById('native-scroll');
+  for (let n = 1; n <= 80; n++) {
+    const p = document.createElement('p');
+    p.textContent = 'Paragraph ' + n + ': Reading operations must leave the spotlight size fixed. Scroll this text normally.';
+    scroller.append(p);
+  }
+  let clicks = 0;
+  const events = [];
+  document.getElementById('native-button').addEventListener('click', event => {
+    clicks++;
+    event.currentTarget.textContent = 'Clicks: ' + clicks;
+  });
+  function record(event) {
+    events.push({ type: event.type, trusted: event.isTrusted, target: event.target.id || '', deltaY: event.deltaY, at: Date.now(), clientX: event.clientX, clientY: event.clientY });
+    if (events.length > 150) events.shift();
+  }
+  for (const type of ['click', 'mousedown', 'mouseup', 'wheel', 'input', 'keydown', 'keyup', 'selectionchange']) {
+    document.addEventListener(type, record, { passive: true });
+  }
+  scroller.addEventListener('scroll', record);
+  window.readingSnapshot = () => ({
+    clicks, input: document.getElementById('native-input').value,
+    selection: String(getSelection()), focus: document.hasFocus(), activeId: document.activeElement.id,
+    scrollTop: scroller.scrollTop, scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight,
+    events: events.map(event => ({ ...event })),
+    rects: Object.fromEntries(['native-button', 'native-input', 'native-text', 'native-scroll'].map(id => {
+      const r = document.getElementById(id).getBoundingClientRect();
+      return [id, { x: r.x, y: r.y, width: r.width, height: r.height, left: r.left, top: r.top, right: r.right, bottom: r.bottom }];
+    })),
+    viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
+  });
+</script>
+</html>

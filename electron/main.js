@@ -20,6 +20,9 @@ let highlightWindow = null;
 let settingsWindow = null;
 let apertureSettings = null;
 let radiusState = null;
+let interactionMode = 'reading';
+let cursorTrackingTimer = null;
+let trayMenu = null;
 // gray mask
 app.disableHardwareAcceleration();
 
@@ -42,6 +45,58 @@ const hideTaskBar = () => {
   }
 };
 
+function stopCursorTracking() {
+  if (cursorTrackingTimer !== null) clearInterval(cursorTrackingTimer);
+  cursorTrackingTimer = null;
+}
+
+function startCursorTracking(window) {
+  stopCursorTracking();
+  const publishPosition = () => {
+    if (interactionMode !== 'reading' || highlightWindow !== window || window.isDestroyed()) return;
+    if (window.webContents.isDestroyed() || window.webContents.isLoadingMainFrame()) return;
+    const { screen } = require('electron');
+    const cursor = screen.getCursorScreenPoint();
+    const bounds = window.getBounds();
+    window.webContents.send('mouse-click:cursor-position', { x: cursor.x - bounds.x, y: cursor.y - bounds.y });
+  };
+  // Reading windows do not receive mouse input. Track the real pointer without
+  // taking focus or depending on Chromium's forwarded mouse events.
+  cursorTrackingTimer = setInterval(publishPosition, 33);
+  window.webContents.on('did-finish-load', publishPosition);
+}
+
+function applyInteractionMode() {
+  if (!highlightWindow || highlightWindow.isDestroyed()) return;
+  const reading = interactionMode === 'reading';
+  // Retire the drawing window's existing key-window status before making it
+  // non-focusable; blur() alone is ineffective on the older macOS runtime.
+  if (reading && highlightWindow.isFocused()) highlightWindow.hide();
+  highlightWindow.setIgnoreMouseEvents(reading);
+  highlightWindow.setFocusable(!reading);
+  highlightWindow.webContents.send('mouse-click:interaction-mode', interactionMode);
+  if (reading) {
+    highlightWindow.showInactive();
+  }
+  else {
+    highlightWindow.show();
+    highlightWindow.focus();
+  }
+}
+
+function setInteractionMode(mode) {
+  interactionMode = mode;
+  for (const menu of [Menu.getApplicationMenu(), trayMenu]) {
+    if (!menu) continue;
+    menu.getMenuItemById('reading-mode').checked = mode === 'reading';
+    menu.getMenuItemById('drawing-mode').checked = mode === 'drawing';
+  }
+  if (!highlightWindow) createHighlightWindow();
+  else applyInteractionMode();
+}
+
+app.on('before-quit', stopCursorTracking);
+
 function createHighlightWindow() {
   hideTaskBar();
 
@@ -63,6 +118,8 @@ function createHighlightWindow() {
     transparent: true,
     frame: false,
     skipTaskbar: true,
+    show: false,
+    focusable: interactionMode !== 'reading',
     webPreferences: {
       preload: __dirname + '/preload.js',
       contextIsolation: true,
@@ -70,6 +127,7 @@ function createHighlightWindow() {
       additionalArguments: [
         '--mouse-click-window=highlight',
         `--mouse-click-initial-radius=${apertureSettings.get()}`,
+        `--mouse-click-interaction-mode=${interactionMode}`,
       ],
     },
     allowRunningInsecureContent: true,
@@ -77,8 +135,10 @@ function createHighlightWindow() {
   highlightWindow.setPosition(x, y);
   highlightWindow.maximize();
   highlightWindow.resizable = false;
-  highlightWindow.show();
   highlightWindow.setAlwaysOnTop(true, 'screen-saver');
+  applyInteractionMode();
+  const window = highlightWindow;
+  startCursorTracking(window);
   // and load the index.html of the app.
   highlightWindow.loadURL(
     isDev
@@ -91,10 +151,12 @@ function createHighlightWindow() {
   //   highlightWindow.webContents.openDevTools();
   // }
 
-  highlightWindow.on('closed', () => {
-    highlightWindow = null;
+  window.on('closed', () => {
+    if (highlightWindow === window) {
+      stopCursorTracking();
+      highlightWindow = null;
+    }
   });
-  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.focus();
 }
 
 function hideHighlightWindow() {
@@ -152,6 +214,9 @@ function apertureMenuItems() {
     { id: 'aperture-settings', label: '光圈大小…', accelerator: 'CommandOrControl+,', click: createSettingsWindow },
     { id: 'highlight-show', label: '开启光圈', click: createHighlightWindow },
     { id: 'highlight-hide', label: '收起光圈', click: hideHighlightWindow },
+    { type: 'separator' },
+    { id: 'reading-mode', type: 'radio', label: '阅读模式（可翻页、点击）', checked: interactionMode === 'reading', click: () => setInteractionMode('reading') },
+    { id: 'drawing-mode', type: 'radio', label: '绘画模式', checked: interactionMode === 'drawing', click: () => setInteractionMode('drawing') },
   ];
 }
 
@@ -203,6 +268,10 @@ function publishRadius(method, value) {
 }
 
 function registerApertureHandlers() {
+  ipcMain.handle('mouse-click:get-interaction-mode', (event) => {
+    assertApplicationSender(event);
+    return interactionMode;
+  });
   ipcMain.handle('mouse-click:get-radius', (event) => {
     assertApplicationSender(event);
     return radiusState;
@@ -233,7 +302,7 @@ function createTray() {
   const iconPath = path.join(__dirname, './trayIcon.png');
   const trayIcon = nativeImage.createFromPath(iconPath);
   tray = new Tray(trayIcon.resize({ width: 16 }));
-  const contextMenu = Menu.buildFromTemplate([
+  trayMenu = Menu.buildFromTemplate([
     {
       label: '关于 Mouse Click',
       click: () =>
@@ -247,7 +316,7 @@ function createTray() {
     { label: 'Quit', click: () => app.quit() },
   ]);
   tray.setToolTip('Mouse Click');
-  tray.setContextMenu(contextMenu);
+  tray.setContextMenu(trayMenu);
 }
 
 // This method will be called when Electron has finished
@@ -270,8 +339,7 @@ app.whenReady().then(() => {
   });
   globalShortcut.register('Alt+x', () => {
     if (highlightWindow) {
-      highlightWindow.close();
-      highlightWindow = null;
+      hideHighlightWindow();
     } else {
       createHighlightWindow();
     }
